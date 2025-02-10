@@ -7,7 +7,6 @@ WORKDIR /app
 # Kopiere die benötigten Dateien
 COPY requirements.txt .
 COPY bot.py .
-COPY .env .
 
 # Installiere die Abhängigkeiten
 RUN pip install --no-cache-dir -r requirements.txt
