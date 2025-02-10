@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 COC_API_TOKEN = os.getenv("COC_API_TOKEN")
-CLAN_TAG = os.getenv("CLAN_TAG", "").replace("#", "%23")  # Hash muss encodiert werden
+CLAN_TAG = os.getenv("CLAN_TAG").replace("#", "%23")  # Hash muss encodiert werden
 API_URL = f"https://api.clashofclans.com/v1/clans/{CLAN_TAG}/currentwar"
 HEADERS = {"Accept": "application/json", "Authorization": f"Bearer {COC_API_TOKEN}"}
 
@@ -23,6 +23,8 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # Speichert die letzte Nachricht und den letzten Status
 war_message = None
 last_war_state = None
+ping_sent = {"start": False, "end": False}  # Speichert, ob @everyone gesendet wurde
+
 
 async def fetch_war_data():
     """Ruft die aktuellen Kriegsdaten von der API ab."""
@@ -36,6 +38,7 @@ async def fetch_war_data():
             print(f"❌ API-Fehler: {e}")
             return None
 
+
 async def get_or_create_channel(guild):
     """Überprüft, ob der Channel existiert, und erstellt ihn, falls nicht."""
     channel_name = "clan-war-updates"
@@ -46,6 +49,7 @@ async def get_or_create_channel(guild):
 
     return await guild.create_text_channel(channel_name)
 
+
 def get_time_remaining(time_str):
     """Berechnet die verbleibende Zeit in Stunden."""
     event_time = datetime.strptime(time_str, "%Y%m%dT%H%M%S.%fZ").replace(tzinfo=timezone.utc)
@@ -53,10 +57,11 @@ def get_time_remaining(time_str):
     remaining = (event_time - now).total_seconds() / 3600  # Stunden zurückgeben
     return remaining
 
+
 @tasks.loop(minutes=5)
 async def update_war_status():
-    """Löscht alte Nachrichten, sendet einen neuen Embed und aktualisiert ihn alle 5 Minuten."""
-    global war_message, last_war_state
+    """Löscht alle Nachrichten, sendet einen neuen Embed und aktualisiert ihn alle 5 Minuten."""
+    global war_message, last_war_state, ping_sent
 
     await bot.wait_until_ready()
 
@@ -67,8 +72,8 @@ async def update_war_status():
     guild = bot.guilds[0]
     channel = await get_or_create_channel(guild)
 
-    # Lösche alte Nachrichten, wenn sie nicht die aktuelle ist
-    async for message in channel.history(limit=None):
+    # Lösche ALLE Nachrichten im Channel (außer der letzten Nachricht)
+    async for message in channel.history(limit=None):  
         if war_message and message.id != war_message.id:
             await message.delete()
 
@@ -80,15 +85,8 @@ async def update_war_status():
     start_time_str = war_data.get("startTime", None)
     end_time_str = war_data.get("endTime", None)
 
-    if start_time_str:
-        start_time_left = get_time_remaining(start_time_str)
-    else:
-        start_time_left = None
-
-    if end_time_str:
-        time_left = get_time_remaining(end_time_str)
-    else:
-        time_left = None
+    start_time_left = get_time_remaining(start_time_str) if start_time_str else None
+    time_left = get_time_remaining(end_time_str) if end_time_str else None
 
     # Embed erstellen
     embed = discord.Embed(title="🏆 **Clash of Clans Krieg**", color=discord.Color.blue())
@@ -100,10 +98,19 @@ async def update_war_status():
     elif war_state == "warEnded":
         embed.description = "🏁 **Der Krieg ist vorbei!**\nSchaut euch die Ergebnisse an!"
 
-    # Falls der Krieg in genau 1 Stunde startet oder endet, pinge @everyone
+    # Nur einmal @everyone senden, wenn 1 Stunde übrig ist
     ping_message = None
-    if (start_time_left and 0.9 < start_time_left < 1.1) or (time_left and 0.9 < time_left < 1.1):
-        ping_message = "@everyone ⚠️ **Nur noch 1 Stunde!** Bereitet euch vor!"
+    if start_time_left and 0.9 < start_time_left < 1.1 and not ping_sent["start"]:
+        ping_message = "@everyone ⚠️ **Der Krieg startet in 1 Stunde!**"
+        ping_sent["start"] = True
+
+    if time_left and 0.9 < time_left < 1.1 and not ping_sent["end"]:
+        ping_message = "@everyone ⏳ **Der Krieg endet in 1 Stunde!** Letzte Chance für Angriffe!"
+        ping_sent["end"] = True
+
+    # Falls der Krieg endet, setze die Pings für den nächsten Krieg zurück
+    if war_state == "warEnded":
+        ping_sent = {"start": False, "end": False}
 
     # Nachricht aktualisieren oder senden
     if war_message:
@@ -113,9 +120,11 @@ async def update_war_status():
 
     last_war_state = war_state
 
+
 @bot.event
 async def on_ready():
     print(f"✅ {bot.user} ist bereit!")
     update_war_status.start()
+
 
 bot.run(TOKEN)
