@@ -8,8 +8,8 @@ from dotenv import load_dotenv
 # Lade Umgebungsvariablen
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
-COC_API_TOKEN = "#" + os.getenv("COC_API_TOKEN")
-CLAN_TAG = os.getenv("CLAN_TAG").replace("#", "%23")  # Hash muss encodiert werden
+COC_API_TOKEN = os.getenv("COC_API_TOKEN")
+CLAN_TAG = os.getenv("CLAN_TAG")
 API_URL = f"https://api.clashofclans.com/v1/clans/{CLAN_TAG}/currentwar"
 HEADERS = {"Accept": "application/json", "Authorization": f"Bearer {COC_API_TOKEN}"}
 
