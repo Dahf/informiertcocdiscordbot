@@ -1,5 +1,6 @@
 services:
   coc-discord-bot:
+    build: .
     image: coc-discord-bot
     container_name: coc_discord_bot
     restart: always
