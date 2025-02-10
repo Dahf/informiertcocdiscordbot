@@ -27,7 +27,7 @@ async def fetch_war_data():
     """Ruft die aktuellen Kriegsdaten von der API ab."""
     async with aiohttp.ClientSession() as session:
         async with session.get(API_URL, headers=HEADERS) as resp:
-            print(resp.json())
+            print(await resp.json())
             if resp.status == 200:
                 return await resp.json()
             else:
