@@ -4,103 +4,118 @@ import os
 import asyncio
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
-import logging
+from datetime import datetime, timezone
+
 # Lade Umgebungsvariablen
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 COC_API_TOKEN = os.getenv("COC_API_TOKEN")
-CLAN_TAG = os.getenv("CLAN_TAG")
+CLAN_TAG = os.getenv("CLAN_TAG", "").replace("#", "%23")  # Hash muss encodiert werden
 API_URL = f"https://api.clashofclans.com/v1/clans/{CLAN_TAG}/currentwar"
 HEADERS = {"Accept": "application/json", "Authorization": f"Bearer {COC_API_TOKEN}"}
-logging.basicConfig(level=logging.INFO)
-# Bot Setup
+
+# Discord Bot Setup
 intents = discord.Intents.default()
-intents.guilds = True  # Benötigt für Channel-Erstellung
+intents.guilds = True
+intents.messages = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Speichert den letzten Status
+# Speichert die letzte Nachricht und den letzten Status
+war_message = None
 last_war_state = None
-war_channel_id = None  # Channel ID speichern
-
 
 async def fetch_war_data():
     """Ruft die aktuellen Kriegsdaten von der API ab."""
     async with aiohttp.ClientSession() as session:
-        async with session.get(API_URL, headers=HEADERS) as resp:
-            data = await resp.json()
-            logging.info(f"{data}") 
-            if resp.status == 200:
-                return await resp.json()
-            else:
+        try:
+            async with session.get(API_URL, headers=HEADERS) as resp:
+                if resp.status == 200:
+                    return await resp.json()
                 return None
-
+        except Exception as e:
+            print(f"❌ API-Fehler: {e}")
+            return None
 
 async def get_or_create_channel(guild):
     """Überprüft, ob der Channel existiert, und erstellt ihn, falls nicht."""
-    global war_channel_id
     channel_name = "clan-war-updates"
 
-    # Überprüfen, ob der Channel existiert
     for channel in guild.text_channels:
         if channel.name == channel_name:
-            war_channel_id = channel.id
             return channel
 
-    # Falls nicht, erstelle einen neuen Channel
-    new_channel = await guild.create_text_channel(channel_name)
-    war_channel_id = new_channel.id
-    return new_channel
+    return await guild.create_text_channel(channel_name)
 
+def get_time_remaining(time_str):
+    """Berechnet die verbleibende Zeit in Stunden."""
+    event_time = datetime.strptime(time_str, "%Y%m%dT%H%M%S.%fZ").replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    remaining = (event_time - now).total_seconds() / 3600  # Stunden zurückgeben
+    return remaining
 
-@tasks.loop(minutes=5)  # Alle 5 Minuten prüfen
-async def check_war_status():
-    """Überprüft regelmäßig den Kriegsstatus und sendet Updates bei Änderungen."""
-    global last_war_state
+@tasks.loop(minutes=5)
+async def update_war_status():
+    """Löscht alte Nachrichten, sendet einen neuen Embed und aktualisiert ihn alle 5 Minuten."""
+    global war_message, last_war_state
 
-    # Warte, bis der Bot bereit ist
     await bot.wait_until_ready()
 
-    # Channel sicherstellen
     if not bot.guilds:
         print("❌ Bot ist in keinem Server!")
         return
 
-    guild = bot.guilds[0]  # Nimm den ersten Server, auf dem der Bot ist
-    channel = await get_or_create_channel(guild)  # Stelle sicher, dass der Channel existiert
+    guild = bot.guilds[0]
+    channel = await get_or_create_channel(guild)
+
+    # Lösche alte Nachrichten, wenn sie nicht die aktuelle ist
+    async for message in channel.history(limit=None):
+        if war_message and message.id != war_message.id:
+            await message.delete()
 
     war_data = await fetch_war_data()
     if not war_data or "state" not in war_data:
         return
 
     war_state = war_data["state"]
-    if war_state == last_war_state:
-        return  # Kein Update nötig
+    start_time_str = war_data.get("startTime", None)
+    end_time_str = war_data.get("endTime", None)
 
-    last_war_state = war_state  # Speichern des aktuellen Status
+    if start_time_str:
+        start_time_left = get_time_remaining(start_time_str)
+    else:
+        start_time_left = None
 
-    embed = discord.Embed(title="🏆 Clash of Clans Krieg Update!", color=discord.Color.blue())
+    if end_time_str:
+        time_left = get_time_remaining(end_time_str)
+    else:
+        time_left = None
+
+    # Embed erstellen
+    embed = discord.Embed(title="🏆 **Clash of Clans Krieg**", color=discord.Color.blue())
 
     if war_state == "preparation":
-        embed.description = "⚔️ **Kriegsvorbereitung läuft!**\nBereite deine Angriffe vor!"
-        embed.add_field(name="Startet in:", value="Bald! 🕒", inline=False)
+        embed.description = f"⚔️ **Kriegsvorbereitung läuft!**\nDer Krieg startet in **{round(start_time_left, 1)} Stunden.**"
     elif war_state == "inWar":
-        embed.description = "🔥 **Der Krieg ist in vollem Gange!**"
-        embed.add_field(name="Endet in:", value="Bald vorbei! ⏳", inline=False)
+        embed.description = f"🔥 **Der Krieg läuft!**\nEr endet in **{round(time_left, 1)} Stunden.**"
     elif war_state == "warEnded":
         embed.description = "🏁 **Der Krieg ist vorbei!**\nSchaut euch die Ergebnisse an!"
+
+    # Falls der Krieg in genau 1 Stunde startet oder endet, pinge @everyone
+    ping_message = None
+    if (start_time_left and 0.9 < start_time_left < 1.1) or (time_left and 0.9 < time_left < 1.1):
+        ping_message = "@everyone ⚠️ **Nur noch 1 Stunde!** Bereitet euch vor!"
+
+    # Nachricht aktualisieren oder senden
+    if war_message:
+        await war_message.edit(content=ping_message if ping_message else "", embed=embed)
     else:
-        embed.description = "❓ Unbekannter Status"
+        war_message = await channel.send(content=ping_message if ping_message else "", embed=embed)
 
-    embed.set_footer(text="Automatisches Clash of Clans Update")
-
-    if channel:
-        await channel.send(embed=embed)
-
+    last_war_state = war_state
 
 @bot.event
 async def on_ready():
     print(f"✅ {bot.user} ist bereit!")
-    check_war_status.start()  # Starte den Task
-
+    update_war_status.start()
 
 bot.run(TOKEN)
