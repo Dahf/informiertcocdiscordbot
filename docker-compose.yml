@@ -3,5 +3,3 @@ services:
     build: .
     container_name: coc_discord_bot
     restart: always
-    env_file:
-      - .env
