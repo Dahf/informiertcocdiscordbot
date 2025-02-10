@@ -1,7 +1,7 @@
 import discord
 import aiohttp
-import asyncio
 import os
+import asyncio
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
@@ -15,10 +15,12 @@ HEADERS = {"Accept": "application/json", "Authorization": f"Bearer {COC_API_TOKE
 
 # Bot Setup
 intents = discord.Intents.default()
+intents.guilds = True  # Benötigt für Channel-Erstellung
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # Speichert den letzten Status
 last_war_state = None
+war_channel_id = None  # Channel ID speichern
 
 
 async def fetch_war_data():
@@ -31,13 +33,40 @@ async def fetch_war_data():
                 return None
 
 
+async def get_or_create_channel(guild):
+    """Überprüft, ob der Channel existiert, und erstellt ihn, falls nicht."""
+    global war_channel_id
+    channel_name = "clan-war-updates"
+
+    # Überprüfen, ob der Channel existiert
+    for channel in guild.text_channels:
+        if channel.name == channel_name:
+            war_channel_id = channel.id
+            return channel
+
+    # Falls nicht, erstelle einen neuen Channel
+    new_channel = await guild.create_text_channel(channel_name)
+    war_channel_id = new_channel.id
+    return new_channel
+
+
 @tasks.loop(minutes=5)  # Alle 5 Minuten prüfen
 async def check_war_status():
     """Überprüft regelmäßig den Kriegsstatus und sendet Updates bei Änderungen."""
     global last_war_state
-    channel = bot.get_channel(DEIN_DISCORD_CHANNEL_ID)  # Setze deine Channel-ID hier ein
-    war_data = await fetch_war_data()
 
+    # Warte, bis der Bot bereit ist
+    await bot.wait_until_ready()
+
+    # Channel sicherstellen
+    if not bot.guilds:
+        print("❌ Bot ist in keinem Server!")
+        return
+
+    guild = bot.guilds[0]  # Nimm den ersten Server, auf dem der Bot ist
+    channel = await get_or_create_channel(guild)  # Stelle sicher, dass der Channel existiert
+
+    war_data = await fetch_war_data()
     if not war_data or "state" not in war_data:
         return
 
@@ -61,7 +90,7 @@ async def check_war_status():
         embed.description = "❓ Unbekannter Status"
 
     embed.set_footer(text="Automatisches Clash of Clans Update")
-    
+
     if channel:
         await channel.send(embed=embed)
 
