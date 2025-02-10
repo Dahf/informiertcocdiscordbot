@@ -4,7 +4,7 @@ import os
 import asyncio
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
-
+import logging
 # Lade Umgebungsvariablen
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -12,7 +12,7 @@ COC_API_TOKEN = os.getenv("COC_API_TOKEN")
 CLAN_TAG = os.getenv("CLAN_TAG")
 API_URL = f"https://api.clashofclans.com/v1/clans/{CLAN_TAG}/currentwar"
 HEADERS = {"Accept": "application/json", "Authorization": f"Bearer {COC_API_TOKEN}"}
-
+logging.basicConfig(level=logging.INFO)
 # Bot Setup
 intents = discord.Intents.default()
 intents.guilds = True  # Benötigt für Channel-Erstellung
@@ -27,7 +27,8 @@ async def fetch_war_data():
     """Ruft die aktuellen Kriegsdaten von der API ab."""
     async with aiohttp.ClientSession() as session:
         async with session.get(API_URL, headers=HEADERS) as resp:
-            print(await resp.json())
+            data = await resp.json()
+            logging.info(f"{data}") 
             if resp.status == 200:
                 return await resp.json()
             else:
