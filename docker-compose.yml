@@ -1,5 +1,9 @@
 services:
   coc-discord-bot:
-    build: .
+    image: coc-discord-bot
     container_name: coc_discord_bot
     restart: always
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - COC_API_TOKEN=${COC_API_TOKEN}
+      - CLAN_TAG=${CLAN_TAG}
