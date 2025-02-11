@@ -17,6 +17,7 @@ WARLOG_URL = f"https://api.clashofclans.com/v1/clans/{CLAN_TAG}/warlog"
 
 # Discord Bot Setup
 intents = discord.Intents.default()
+intents.message_content = True
 intents.guilds = True
 intents.messages = True
 bot = commands.Bot(command_prefix="!", intents=intents)
