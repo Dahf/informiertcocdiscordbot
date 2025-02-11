@@ -13,6 +13,7 @@ COC_API_TOKEN = os.getenv("COC_API_TOKEN")
 CLAN_TAG = os.getenv("CLAN_TAG").replace("#", "%23")  # Hash muss encodiert werden
 API_URL = f"https://api.clashofclans.com/v1/clans/{CLAN_TAG}/currentwar"
 HEADERS = {"Accept": "application/json", "Authorization": f"Bearer {COC_API_TOKEN}"}
+WARLOG_URL = f"https://api.clashofclans.com/v1/clans/{CLAN_TAG}/warlog"
 
 # Discord Bot Setup
 intents = discord.Intents.default()
@@ -25,19 +26,17 @@ war_message = None
 last_war_state = None
 ping_sent = {"start": False, "end": False}  # Speichert, ob @everyone gesendet wurde
 
-
-async def fetch_war_data():
-    """Ruft die aktuellen Kriegsdaten von der API ab."""
+async def fetch_data(url):
+    """Ruft Daten von der Clash of Clans API ab."""
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.get(API_URL, headers=HEADERS) as resp:
+            async with session.get(url, headers=HEADERS) as resp:
                 if resp.status == 200:
                     return await resp.json()
                 return None
         except Exception as e:
             print(f"❌ API-Fehler: {e}")
             return None
-
 
 async def get_or_create_channel(guild):
     """Überprüft, ob der Channel existiert, und erstellt ihn, falls nicht."""
@@ -57,6 +56,63 @@ def get_time_remaining(time_str):
     remaining = (event_time - now).total_seconds() / 3600  # Stunden zurückgeben
     return remaining
 
+@bot.command()
+async def stats(ctx):
+    """Zeigt die Clan-Statistiken des aktuellen Krieges an."""
+    war_data = await fetch_data(API_URL)
+
+    if not war_data or "state" not in war_data:
+        await ctx.send("❌ Es gibt aktuell keine Kriegsdaten.")
+        return
+
+    # Basis-Statistiken abrufen
+    clan_name = war_data.get("clan", {}).get("name", "Unbekannt")
+    opponent_name = war_data.get("opponent", {}).get("name", "Unbekannt")
+    clan_stars = war_data.get("clan", {}).get("stars", 0)
+    opponent_stars = war_data.get("opponent", {}).get("stars", 0)
+    attacks_used = war_data.get("clan", {}).get("attacks", 0)
+    team_size = war_data.get("teamSize", 0)
+
+    # Durchschnittliche Sterne pro Angriff berechnen
+    avg_stars_per_attack = round(clan_stars / attacks_used, 2) if attacks_used > 0 else 0
+
+    # Erstelle Embed
+    embed = discord.Embed(title="📊 **Aktuelle Kriegsstatistiken**", color=discord.Color.green())
+    embed.add_field(name="🏆 Clan", value=f"**{clan_name}**", inline=True)
+    embed.add_field(name="⚔️ Gegner", value=f"**{opponent_name}**", inline=True)
+    embed.add_field(name="⭐ Sterne", value=f"{clan_stars} - {opponent_stars}", inline=False)
+    embed.add_field(name="🎯 Angriffe genutzt", value=f"{attacks_used} / {team_size * 2}", inline=True)
+    embed.add_field(name="📊 Sterne pro Angriff", value=f"{avg_stars_per_attack}", inline=True)
+    embed.set_footer(text="Daten live aus der Clash of Clans API.")
+
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def warlog(ctx):
+    """Zeigt die letzten Clan-Kriege an."""
+    warlog_data = await fetch_data(WARLOG_URL)
+
+    if not warlog_data or "items" not in warlog_data:
+        await ctx.send("❌ Keine letzten Kriege gefunden.")
+        return
+
+    embed = discord.Embed(title="📜 **Letzte Clan-Kriege**", color=discord.Color.purple())
+
+    for war in warlog_data["items"][:5]:  # Nur die letzten 5 Kriege anzeigen
+        enemy_clan = war.get("opponent", {}).get("name", "Unbekannt")
+        clan_stars = war.get("clan", {}).get("stars", 0)
+        enemy_stars = war.get("opponent", {}).get("stars", 0)
+        attacks_used = war.get("clan", {}).get("attacks", 0)
+        team_size = war.get("teamSize", 0)
+        result = war.get("result", "unbekannt").capitalize()
+
+        # Formatierte Infos
+        war_summary = f"**Ergebnis:** {result}\n⭐ {clan_stars} - {enemy_stars} Sterne\n🎯 {attacks_used}/{team_size*2} Angriffe genutzt"
+
+        embed.add_field(name=f"🆚 {enemy_clan}", value=war_summary, inline=False)
+
+    embed.set_footer(text="Daten live aus der Clash of Clans API.")
+    await ctx.send(embed=embed)
 
 @tasks.loop(minutes=5)
 async def update_war_status():
