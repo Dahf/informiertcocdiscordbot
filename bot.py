@@ -117,7 +117,7 @@ async def warlog(ctx):
 
 @tasks.loop(minutes=5)
 async def update_war_status():
-    """Löscht alle Nachrichten, sendet einen neuen Embed und aktualisiert ihn alle 5 Minuten."""
+    """Hält den Channel aktuell und sendet @everyone nur einmal vor Start/Ende."""
     global war_message, last_war_state, ping_sent
 
     await bot.wait_until_ready()
@@ -129,12 +129,12 @@ async def update_war_status():
     guild = bot.guilds[0]
     channel = await get_or_create_channel(guild)
 
-    # Lösche ALLE Nachrichten im Channel (außer der letzten Nachricht)
+    # Lösche nur alte Embed-Nachricht (nicht die @everyone-Nachricht)
     async for message in channel.history(limit=None):  
-        if war_message and message.id != war_message.id:
+        if war_message and message.id != war_message.id and not message.content.startswith("@everyone"):
             await message.delete()
 
-    war_data = await fetch_data(API_URL)
+    war_data = await fetch_war_data()
     if not war_data or "state" not in war_data:
         return
 
@@ -145,7 +145,7 @@ async def update_war_status():
     start_time_left = get_time_remaining(start_time_str) if start_time_str else None
     time_left = get_time_remaining(end_time_str) if end_time_str else None
 
-    # Embed erstellen
+    # Embed für den Krieg erstellen
     embed = discord.Embed(title="🏆 **Clash of Clans Krieg**", color=discord.Color.blue())
 
     if war_state == "preparation":
@@ -155,27 +155,27 @@ async def update_war_status():
     elif war_state == "warEnded":
         embed.description = "🏁 **Der Krieg ist vorbei!**\nSchaut euch die Ergebnisse an!"
 
-    # Nur einmal @everyone senden, wenn 1 Stunde übrig ist
-    ping_message = None
+    # Falls der Krieg in genau 1 Stunde startet oder endet, sende @everyone als SEPARATE Nachricht
     if start_time_left and 0.9 < start_time_left < 1.1 and not ping_sent["start"]:
-        ping_message = "@everyone ⚠️ **Der Krieg startet in 1 Stunde!**"
+        await channel.send("@everyone ⚠️ **Der Krieg startet in 1 Stunde!**")
         ping_sent["start"] = True
 
     if time_left and 0.9 < time_left < 1.1 and not ping_sent["end"]:
-        ping_message = "@everyone ⏳ **Der Krieg endet in 1 Stunde!** Letzte Chance für Angriffe!"
+        await channel.send("@everyone ⏳ **Der Krieg endet in 1 Stunde!** Letzte Chance für Angriffe!")
         ping_sent["end"] = True
 
     # Falls der Krieg endet, setze die Pings für den nächsten Krieg zurück
     if war_state == "warEnded":
         ping_sent = {"start": False, "end": False}
 
-    # Nachricht aktualisieren oder senden
+    # Nachricht aktualisieren oder neue senden
     if war_message:
-        await war_message.edit(content=ping_message if ping_message else "", embed=embed)
+        await war_message.edit(embed=embed)
     else:
-        war_message = await channel.send(content=ping_message if ping_message else "", embed=embed)
+        war_message = await channel.send(embed=embed)
 
     last_war_state = war_state
+
 
 
 @bot.event
