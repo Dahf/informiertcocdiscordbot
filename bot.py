@@ -115,9 +115,9 @@ async def warlog(ctx):
     embed.set_footer(text="Daten live aus der Clash of Clans API.")
     await ctx.send(embed=embed)
 
-@tasks.loop(minutes=5)
+@tasks.loop(seconds=1)
 async def update_war_status():
-    """Hält den Channel aktuell und sendet @everyone nur einmal vor Start/Ende."""
+    """Hält den Channel aktuell, analysiert unser Team und sendet @everyone nur einmal vor Start/Ende."""
     global war_message, last_war_state, ping_sent
 
     await bot.wait_until_ready()
@@ -129,7 +129,7 @@ async def update_war_status():
     guild = bot.guilds[0]
     channel = await get_or_create_channel(guild)
 
-    # Lösche nur alte Embed-Nachricht (nicht die @everyone-Nachricht)
+    # Lösche alte Embed-Nachricht, aber nicht @everyone-Nachrichten
     async for message in channel.history(limit=None):  
         if war_message and message.id != war_message.id and not message.content.startswith("@everyone"):
             await message.delete()
@@ -145,6 +145,36 @@ async def update_war_status():
     start_time_left = get_time_remaining(start_time_str) if start_time_str else None
     time_left = get_time_remaining(end_time_str) if end_time_str else None
 
+    # Kriegsinfos sammeln
+    clan_name = war_data.get("clan", {}).get("name", "Unbekannt")
+    opponent_name = war_data.get("opponent", {}).get("name", "Unbekannt")
+    clan_stars = war_data.get("clan", {}).get("stars", 0)
+    opponent_stars = war_data.get("opponent", {}).get("stars", 0)
+    attacks_used = war_data.get("clan", {}).get("attacks", 0)
+    team_size = war_data.get("teamSize", 0)
+    remaining_attacks = team_size * 2 - attacks_used
+
+    # **Team-Analyse: Durchschnittliches Rathaus-Level & Trophäen berechnen**
+    def analyze_team(team_data):
+        total_th_level = 0
+        total_trophies = 0
+        player_count = len(team_data)
+
+        if player_count == 0:
+            return {"avg_th": 0, "avg_trophies": 0}
+
+        for player in team_data:
+            total_th_level += player.get("townhallLevel", 0)
+            total_trophies += player.get("trophies", 0)
+
+        return {
+            "avg_th": round(total_th_level / player_count, 1),
+            "avg_trophies": round(total_trophies / player_count, 1),
+        }
+
+    clan_analysis = analyze_team(war_data.get("clan", {}).get("members", []))
+    opponent_analysis = analyze_team(war_data.get("opponent", {}).get("members", []))
+
     # Embed für den Krieg erstellen
     embed = discord.Embed(title="🏆 **Clash of Clans Krieg**", color=discord.Color.blue())
 
@@ -154,6 +184,14 @@ async def update_war_status():
         embed.description = f"🔥 **Der Krieg läuft!**\nEr endet in **{round(time_left, 1)} Stunden.**"
     elif war_state == "warEnded":
         embed.description = "🏁 **Der Krieg ist vorbei!**\nSchaut euch die Ergebnisse an!"
+
+    # Detailierte Kriegsinfos hinzufügen
+    embed.add_field(name="🏆 Clan", value=f"**{clan_name}**", inline=True)
+    embed.add_field(name="⚔️ Gegner", value=f"**{opponent_name}**", inline=True)
+    embed.add_field(name="⭐ Sterne", value=f"{clan_stars} - {opponent_stars}", inline=False)
+    embed.add_field(name="🎯 Angriffe genutzt", value=f"{attacks_used} / {team_size * 2}", inline=True)
+    embed.add_field(name="⚡ Verbleibende Angriffe", value=f"{remaining_attacks}", inline=True)
+    embed.add_field(name="📊 Team-Analyse", value=f"🏠 **Ø Rathaus-Level**: {clan_analysis['avg_th']} vs. {opponent_analysis['avg_th']}\n🏆 **Ø Trophäen**: {clan_analysis['avg_trophies']} vs. {opponent_analysis['avg_trophies']}", inline=False)
 
     # Falls der Krieg in genau 1 Stunde startet oder endet, sende @everyone als SEPARATE Nachricht
     if start_time_left and 0.9 < start_time_left < 1.1 and not ping_sent["start"]:
@@ -175,6 +213,7 @@ async def update_war_status():
         war_message = await channel.send(embed=embed)
 
     last_war_state = war_state
+
 
 
 
