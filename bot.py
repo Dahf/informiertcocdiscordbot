@@ -134,7 +134,7 @@ async def update_war_status():
         if war_message and message.id != war_message.id and not message.content.startswith("@everyone"):
             await message.delete()
 
-    war_data = await fetch_war_data()
+    war_data = await fetch_data(API_URL)
     if not war_data or "state" not in war_data:
         return
 
