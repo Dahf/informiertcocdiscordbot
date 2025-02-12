@@ -158,12 +158,17 @@ async def analyze_team_with_cache(team_data, is_enemy_team=False):
     total_th_level = 0
     total_trophies = 0
     player_count = len(team_data)
-    
-    if player_count == 0:
-        logging.warning("⚠️ Keine Spieler im Team gefunden!")
-        return {"avg_th": 0, "avg_trophies": 0}
-    
+
+    # Lade gespeicherte Gegner-Stats
     enemy_stats = load_enemy_stats() if is_enemy_team else {}
+
+    if player_count == 0:
+        logging.warning(f"⚠️ Keine Spieler im {'Gegnerteam' if is_enemy_team else 'Team'} gefunden! Nutze gespeicherte Werte.")
+        if is_enemy_team and enemy_stats:
+            avg_th = round(sum(p["townHallLevel"] for p in enemy_stats.values()) / len(enemy_stats), 1)
+            avg_trophies = round(sum(p["trophies"] for p in enemy_stats.values()) / len(enemy_stats), 1)
+            return {"avg_th": avg_th, "avg_trophies": avg_trophies}
+        return {"avg_th": 0, "avg_trophies": 0}
 
     tasks = []
     for player in team_data:
@@ -184,7 +189,7 @@ async def analyze_team_with_cache(team_data, is_enemy_team=False):
             player_tag = player["tag"]
             town_hall = player_data.get("townHallLevel", 0)
             trophies = player_data.get("trophies", 0)
-            
+
             total_th_level += town_hall
             total_trophies += trophies
             valid_players += 1
@@ -195,6 +200,14 @@ async def analyze_team_with_cache(team_data, is_enemy_team=False):
     if is_enemy_team:
         save_enemy_stats(enemy_stats)  # Speichere Gegner-Stats nur einmal
 
+    # Falls `valid_players == 0`, aber gespeicherte Werte existieren → Nutze diese
+    if valid_players == 0 and is_enemy_team and enemy_stats:
+        logging.warning("⚠️ Keine neuen Gegner gefunden, aber nutze gespeicherte Gegner-Stats.")
+        avg_th = round(sum(p["townHallLevel"] for p in enemy_stats.values()) / len(enemy_stats), 1)
+        avg_trophies = round(sum(p["trophies"] for p in enemy_stats.values()) / len(enemy_stats), 1)
+        return {"avg_th": avg_th, "avg_trophies": avg_trophies}
+
+    # Falls wirklich keine Werte existieren
     if valid_players == 0:
         logging.warning(f"⚠️ Keine gültigen Spieler gefunden für {'Gegner' if is_enemy_team else 'Team'}!")
         return {"avg_th": 0, "avg_trophies": 0}
@@ -203,6 +216,7 @@ async def analyze_team_with_cache(team_data, is_enemy_team=False):
         "avg_th": round(total_th_level / valid_players, 1),
         "avg_trophies": round(total_trophies / valid_players, 1),
     }
+
 
 @tasks.loop(seconds=5)  # Alle 5 Sekunden
 async def update_war_status():
