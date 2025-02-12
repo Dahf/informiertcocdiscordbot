@@ -115,7 +115,7 @@ async def warlog(ctx):
     embed.set_footer(text="Daten live aus der Clash of Clans API.")
     await ctx.send(embed=embed)
 
-@tasks.loop(seconds=1)
+@tasks.loop(seconds=10)
 async def update_war_status():
     """Hält den Channel aktuell, analysiert unser Team und sendet @everyone nur einmal vor Start/Ende."""
     global war_message, last_war_state, ping_sent
