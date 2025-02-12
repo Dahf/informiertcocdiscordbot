@@ -143,7 +143,9 @@ async def fetch_player_stats(player_tag):
         try:
             async with session.get(url, headers=HEADERS) as resp:
                 if resp.status == 200:
-                    return await resp.json()
+                    data = await resp.json()
+                    logging.info(f"✅ Erfolgreich Daten geladen für {player_tag}: TH {data.get('townHallLevel', 0)}, Trophies {data.get('trophies', 0)}")
+                    return data
                 else:
                     logging.warning(f"⚠️ Fehler beim Abrufen von {player_tag}: Status {resp.status}")
                     return None
@@ -158,13 +160,17 @@ async def analyze_team_with_cache(team_data, is_enemy_team=False):
     player_count = len(team_data)
     
     if player_count == 0:
+        logging.warning("⚠️ Keine Spieler im Team gefunden!")
         return {"avg_th": 0, "avg_trophies": 0}
     
     enemy_stats = load_enemy_stats() if is_enemy_team else {}
 
     tasks = []
     for player in team_data:
-        player_tag = player["tag"]
+        player_tag = player.get("tag", "")
+        if not player_tag:
+            logging.warning(f"⚠️ Kein gültiger Tag für einen Spieler gefunden!")
+            continue
         if is_enemy_team and player_tag in enemy_stats:
             logging.info(f"⚡ Verwende gespeicherte Daten für Gegner {player_tag}")
             continue  # Falls Spieler schon gespeichert ist, keine neue Anfrage senden
@@ -190,6 +196,7 @@ async def analyze_team_with_cache(team_data, is_enemy_team=False):
         save_enemy_stats(enemy_stats)  # Speichere Gegner-Stats nur einmal
 
     if valid_players == 0:
+        logging.warning(f"⚠️ Keine gültigen Spieler gefunden für {'Gegner' if is_enemy_team else 'Team'}!")
         return {"avg_th": 0, "avg_trophies": 0}
 
     return {
