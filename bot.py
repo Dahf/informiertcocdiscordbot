@@ -5,6 +5,7 @@ import asyncio
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 from datetime import datetime, timezone
+import logging
 
 # Lade Umgebungsvariablen
 load_dotenv()
@@ -14,6 +15,9 @@ CLAN_TAG = os.getenv("CLAN_TAG").replace("#", "%23")  # Hash muss encodiert werd
 API_URL = f"https://api.clashofclans.com/v1/clans/{CLAN_TAG}/currentwar"
 HEADERS = {"Accept": "application/json", "Authorization": f"Bearer {COC_API_TOKEN}"}
 WARLOG_URL = f"https://api.clashofclans.com/v1/clans/{CLAN_TAG}/warlog"
+
+# Logging konfigurieren
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # Discord Bot Setup
 intents = discord.Intents.default()
@@ -114,14 +118,87 @@ async def warlog(ctx):
 
     embed.set_footer(text="Daten live aus der Clash of Clans API.")
     await ctx.send(embed=embed)
-import logging
 
-# Logging konfigurieren
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+ENEMY_STATS_FILE = "enemy_stats.json"
 
-@tasks.loop(seconds=5)  # Jetzt läuft die Schleife alle 5 Sekunden
+def load_enemy_stats():
+    """Lädt gespeicherte Gegner-Stats aus einer Datei."""
+    if os.path.exists(ENEMY_STATS_FILE):
+        with open(ENEMY_STATS_FILE, "r") as file:
+            return json.load(file)
+    return {}
+
+def save_enemy_stats(enemy_stats):
+    """Speichert die Gegner-Stats in eine Datei."""
+    with open(ENEMY_STATS_FILE, "w") as file:
+        json.dump(enemy_stats, file, indent=4)
+
+async def fetch_player_stats(player_tag):
+    """Holt die Trophäen & das Rathaus-Level aus der Clash of Clans API."""
+    player_tag_encoded = player_tag.replace("#", "%23")
+    url = f"https://api.clashofclans.com/v1/players/{player_tag_encoded}"
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url, headers=HEADERS) as resp:
+                if resp.status == 200:
+                    return await resp.json()
+                else:
+                    logging.warning(f"⚠️ Fehler beim Abrufen von {player_tag}: Status {resp.status}")
+                    return None
+        except Exception as e:
+            logging.error(f"❌ API-Fehler bei {player_tag}: {e}")
+            return None
+
+async def analyze_team_with_cache(team_data, is_enemy_team=False):
+    """Berechnet das durchschnittliche Rathaus-Level & die Trophäen und speichert Gegner-Stats."""
+    total_th_level = 0
+    total_trophies = 0
+    player_count = len(team_data)
+    
+    if player_count == 0:
+        return {"avg_th": 0, "avg_trophies": 0}
+    
+    enemy_stats = load_enemy_stats() if is_enemy_team else {}
+
+    tasks = []
+    for player in team_data:
+        player_tag = player["tag"]
+        if is_enemy_team and player_tag in enemy_stats:
+            logging.info(f"⚡ Verwende gespeicherte Daten für Gegner {player_tag}")
+            continue  # Falls Spieler schon gespeichert ist, keine neue Anfrage senden
+        tasks.append(fetch_player_stats(player_tag))
+
+    results = await asyncio.gather(*tasks)
+
+    valid_players = 0
+    for player, player_data in zip(team_data, results):
+        if player_data:
+            player_tag = player["tag"]
+            town_hall = player_data.get("townHallLevel", 0)
+            trophies = player_data.get("trophies", 0)
+            
+            total_th_level += town_hall
+            total_trophies += trophies
+            valid_players += 1
+
+            if is_enemy_team:
+                enemy_stats[player_tag] = {"townHallLevel": town_hall, "trophies": trophies}
+
+    if is_enemy_team:
+        save_enemy_stats(enemy_stats)  # Speichere Gegner-Stats nur einmal
+
+    if valid_players == 0:
+        return {"avg_th": 0, "avg_trophies": 0}
+
+    return {
+        "avg_th": round(total_th_level / valid_players, 1),
+        "avg_trophies": round(total_trophies / valid_players, 1),
+    }
+
+@tasks.loop(seconds=5)  # Alle 5 Sekunden
 async def update_war_status():
-    """Hält den Channel aktuell, analysiert unser Team und sendet @everyone nur einmal vor Start/Ende."""
+    """Holt Kriegsdaten, analysiert unser Team mit der Spieler-API und speichert Gegner-Stats."""
     global war_message, last_war_state, ping_sent
 
     logging.info("🔄 update_war_status wird ausgeführt...")
@@ -135,17 +212,9 @@ async def update_war_status():
     guild = bot.guilds[0]
     channel = await get_or_create_channel(guild)
 
-    # Lösche alte Embed-Nachricht, aber nicht @everyone-Nachrichten
-    async for message in channel.history(limit=None):  
-        if war_message and message.id != war_message.id and not message.content.startswith("@everyone"):
-            await message.delete()
-
     war_data = await fetch_data(API_URL)
-    if not war_data:
-        logging.warning("⚠️ Keine Kriegsdaten erhalten. API-Antwort war leer.")
-        return
-    if "state" not in war_data:
-        logging.warning("⚠️ API gibt keine 'state'-Daten zurück!")
+    if not war_data or "state" not in war_data:
+        logging.warning("⚠️ API gibt keine Kriegsdaten zurück.")
         return
 
     war_state = war_data["state"]
@@ -164,26 +233,9 @@ async def update_war_status():
     team_size = war_data.get("teamSize", 0)
     remaining_attacks = team_size * 2 - attacks_used
 
-    # **Team-Analyse: Durchschnittliches Rathaus-Level & Trophäen berechnen**
-    def analyze_team(team_data):
-        total_th_level = 0
-        total_trophies = 0
-        player_count = len(team_data)
-
-        if player_count == 0:
-            return {"avg_th": 0, "avg_trophies": 0}
-
-        for player in team_data:
-            total_th_level += player.get("townhallLevel", 0)
-            total_trophies += player.get("trophies", 0)
-
-        return {
-            "avg_th": round(total_th_level / player_count, 1),
-            "avg_trophies": round(total_trophies / player_count, 1),
-        }
-
-    clan_analysis = analyze_team(war_data.get("clan", {}).get("members", []))
-    opponent_analysis = analyze_team(war_data.get("opponent", {}).get("members", []))
+    # **Team-Analyse mit API und Cache**
+    clan_analysis = await analyze_team_with_cache(war_data.get("clan", {}).get("members", []), is_enemy_team=False)
+    opponent_analysis = await analyze_team_with_cache(war_data.get("opponent", {}).get("members", []), is_enemy_team=True)
 
     # Embed für den Krieg erstellen
     embed = discord.Embed(title="🏆 **Clash of Clans Krieg**", color=discord.Color.blue())
@@ -203,21 +255,6 @@ async def update_war_status():
     embed.add_field(name="⚡ Verbleibende Angriffe", value=f"{remaining_attacks}", inline=True)
     embed.add_field(name="📊 Team-Analyse", value=f"🏠 **Ø Rathaus-Level**: {clan_analysis['avg_th']} vs. {opponent_analysis['avg_th']}\n🏆 **Ø Trophäen**: {clan_analysis['avg_trophies']} vs. {opponent_analysis['avg_trophies']}", inline=False)
 
-    # Falls der Krieg in genau 1 Stunde startet oder endet, sende @everyone als SEPARATE Nachricht
-    if start_time_left and 0.9 < start_time_left < 1.1 and not ping_sent["start"]:
-        await channel.send("@everyone ⚠️ **Der Krieg startet in 1 Stunde!**")
-        ping_sent["start"] = True
-        logging.info("📢 @everyone für Kriegstart gesendet!")
-
-    if time_left and 0.9 < time_left < 1.1 and not ping_sent["end"]:
-        await channel.send("@everyone ⏳ **Der Krieg endet in 1 Stunde!** Letzte Chance für Angriffe!")
-        ping_sent["end"] = True
-        logging.info("📢 @everyone für Kriegsende gesendet!")
-
-    # Falls der Krieg endet, setze die Pings für den nächsten Krieg zurück
-    if war_state == "warEnded":
-        ping_sent = {"start": False, "end": False}
-
     # Nachricht aktualisieren oder neue senden
     if war_message:
         await war_message.edit(embed=embed)
@@ -225,12 +262,6 @@ async def update_war_status():
     else:
         war_message = await channel.send(embed=embed)
         logging.info("✅ Neue Embed-Nachricht gesendet.")
-
-    last_war_state = war_state
-
-
-
-
 
 @bot.event
 async def on_ready():
