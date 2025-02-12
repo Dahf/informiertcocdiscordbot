@@ -114,16 +114,22 @@ async def warlog(ctx):
 
     embed.set_footer(text="Daten live aus der Clash of Clans API.")
     await ctx.send(embed=embed)
+import logging
 
-@tasks.loop(seconds=10)
+# Logging konfigurieren
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+@tasks.loop(seconds=5)  # Jetzt läuft die Schleife alle 5 Sekunden
 async def update_war_status():
     """Hält den Channel aktuell, analysiert unser Team und sendet @everyone nur einmal vor Start/Ende."""
     global war_message, last_war_state, ping_sent
 
+    logging.info("🔄 update_war_status wird ausgeführt...")
+
     await bot.wait_until_ready()
 
     if not bot.guilds:
-        print("❌ Bot ist in keinem Server!")
+        logging.warning("❌ Bot ist in keinem Server!")
         return
 
     guild = bot.guilds[0]
@@ -135,7 +141,11 @@ async def update_war_status():
             await message.delete()
 
     war_data = await fetch_data(API_URL)
-    if not war_data or "state" not in war_data:
+    if not war_data:
+        logging.warning("⚠️ Keine Kriegsdaten erhalten. API-Antwort war leer.")
+        return
+    if "state" not in war_data:
+        logging.warning("⚠️ API gibt keine 'state'-Daten zurück!")
         return
 
     war_state = war_data["state"]
@@ -197,10 +207,12 @@ async def update_war_status():
     if start_time_left and 0.9 < start_time_left < 1.1 and not ping_sent["start"]:
         await channel.send("@everyone ⚠️ **Der Krieg startet in 1 Stunde!**")
         ping_sent["start"] = True
+        logging.info("📢 @everyone für Kriegstart gesendet!")
 
     if time_left and 0.9 < time_left < 1.1 and not ping_sent["end"]:
         await channel.send("@everyone ⏳ **Der Krieg endet in 1 Stunde!** Letzte Chance für Angriffe!")
         ping_sent["end"] = True
+        logging.info("📢 @everyone für Kriegsende gesendet!")
 
     # Falls der Krieg endet, setze die Pings für den nächsten Krieg zurück
     if war_state == "warEnded":
@@ -209,10 +221,13 @@ async def update_war_status():
     # Nachricht aktualisieren oder neue senden
     if war_message:
         await war_message.edit(embed=embed)
+        logging.info("✅ Embed-Nachricht aktualisiert.")
     else:
         war_message = await channel.send(embed=embed)
+        logging.info("✅ Neue Embed-Nachricht gesendet.")
 
     last_war_state = war_state
+
 
 
 
