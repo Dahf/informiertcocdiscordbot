@@ -6,6 +6,7 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 from datetime import datetime, timezone
 import logging
+import json
 
 # Lade Umgebungsvariablen
 load_dotenv()
